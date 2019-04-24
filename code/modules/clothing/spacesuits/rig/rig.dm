@@ -26,6 +26,8 @@
 	unacidable = 1
 	preserve_item = 1
 
+	var/suit_state //The string used for the suit's icon_state.
+
 	var/interface_path = "hardsuit.tmpl"
 	var/ai_interface_path = "hardsuit.tmpl"
 	var/interface_title = "Hardsuit Controller"
@@ -81,7 +83,9 @@
 	var/offline_slowdown = 3                                  // If the suit is deployed and unpowered, it sets slowdown to this.
 	var/vision_restriction
 	var/offline_vision_restriction = 1                        // 0 - none, 1 - welder vision, 2 - blind. Maybe move this to helmets.
-	var/airtight = 1 //If set, will adjust AIRTIGHT and STOPPRESSUREDAMAGE flags on components. Otherwise it should leave them untouched.
+	var/airtight = 1 //If set, will adjust AIRTIGHT flag and pressure protections on components. Otherwise it should leave them untouched.
+	var/rigsuit_max_pressure = 10 * ONE_ATMOSPHERE			  // Max pressure the rig protects against when sealed
+	var/rigsuit_min_pressure = 0							  // Min pressure the rig protects against when sealed
 
 	var/emp_protection = 0
 
@@ -90,26 +94,27 @@
 	var/datum/effect/effect/system/spark_spread/spark_system
 
 /obj/item/weapon/rig/examine()
-	usr << "This is \icon[src][src.name]."
-	usr << "[src.desc]"
+	to_chat(usr, "This is \icon[src][src.name].")
+	to_chat(usr, "[src.desc]")
 	if(wearer)
 		for(var/obj/item/piece in list(helmet,gloves,chest,boots))
 			if(!piece || piece.loc != wearer)
 				continue
-			usr << "\icon[piece] \The [piece] [piece.gender == PLURAL ? "are" : "is"] deployed."
+			to_chat(usr, "\icon[piece] \The [piece] [piece.gender == PLURAL ? "are" : "is"] deployed.")
 
 	if(src.loc == usr)
-		usr << "The access panel is [locked? "locked" : "unlocked"]."
-		usr << "The maintenance panel is [open ? "open" : "closed"]."
-		usr << "Hardsuit systems are [offline ? "<font color='red'>offline</font>" : "<font color='green'>online</font>"]."
-		usr << "The cooling stystem is [cooling_on ? "active" : "inactive"]."
+		to_chat(usr, "The access panel is [locked? "locked" : "unlocked"].")
+		to_chat(usr, "The maintenance panel is [open ? "open" : "closed"].")
+		to_chat(usr, "Hardsuit systems are [offline ? "<font color='red'>offline</font>" : "<font color='green'>online</font>"].")
+		to_chat(usr, "The cooling stystem is [cooling_on ? "active" : "inactive"].")
 
 		if(open)
-			usr << "It's equipped with [english_list(installed_modules)]."
+			to_chat(usr, "It's equipped with [english_list(installed_modules)].")
 
 /obj/item/weapon/rig/New()
 	..()
 
+	suit_state = icon_state
 	item_state = icon_state
 	wires = new(src)
 
@@ -120,7 +125,7 @@
 	spark_system.set_up(5, 0, src)
 	spark_system.attach(src)
 
-	processing_objects |= src
+	START_PROCESSING(SSobj, src)
 
 	if(initial_modules && initial_modules.len)
 		for(var/path in initial_modules)
@@ -154,7 +159,7 @@
 		piece.canremove = 0
 		piece.name = "[suit_type] [initial(piece.name)]"
 		piece.desc = "It seems to be part of a [src.name]."
-		piece.icon_state = "[initial(icon_state)]"
+		piece.icon_state = "[suit_state]"
 		piece.min_cold_protection_temperature = min_cold_protection_temperature
 		piece.max_heat_protection_temperature = max_heat_protection_temperature
 		if(piece.siemens_coefficient > siemens_coefficient) //So that insulated gloves keep their insulation.
@@ -172,7 +177,7 @@
 		if(istype(M))
 			M.drop_from_inventory(piece)
 		qdel(piece)
-	processing_objects -= src
+	STOP_PROCESSING(SSobj, src)
 	qdel(wires)
 	wires = null
 	qdel(spark_system)
@@ -201,14 +206,29 @@
 		return 0
 	return 1
 
+// Updates pressure protection
+// Seal = 1 sets protection
+// Seal = 0 unsets protection
+/obj/item/weapon/rig/proc/update_airtight(var/obj/item/piece, var/seal = 0)
+	if(seal == 1)
+		piece.min_pressure_protection = rigsuit_min_pressure
+		piece.max_pressure_protection = rigsuit_max_pressure
+		piece.item_flags |= AIRTIGHT
+	else
+		piece.min_pressure_protection = null
+		piece.max_pressure_protection = null
+		piece.item_flags &= ~AIRTIGHT
+	return
+
+
 /obj/item/weapon/rig/proc/reset()
 	offline = 2
 	canremove = 1
 	for(var/obj/item/piece in list(helmet,boots,gloves,chest))
 		if(!piece) continue
-		piece.icon_state = "[initial(icon_state)]"
+		piece.icon_state = "[suit_state]"
 		if(airtight)
-			piece.item_flags &= ~(STOPPRESSUREDAMAGE|AIRTIGHT)
+			update_airtight(piece, 0) // Unseal
 	update_icon(1)
 
 /obj/item/weapon/rig/proc/toggle_seals(var/mob/living/carbon/human/M,var/instant)
@@ -246,7 +266,8 @@
 		if(!instant)
 			M.visible_message("<font color='blue'>[M]'s suit emits a quiet hum as it begins to adjust its seals.</font>","<font color='blue'>With a quiet hum, the suit begins running checks and adjusting components.</font>")
 			if(seal_delay && !do_after(M,seal_delay))
-				if(M) M << "<span class='warning'>You must remain still while the suit is adjusting the components.</span>"
+				if(M)
+					to_chat(M, "<span class='warning'>You must remain still while the suit is adjusting the components.</span>")
 				failed_to_seal = 1
 		if(!M)
 			failed_to_seal = 1
@@ -262,7 +283,8 @@
 					continue
 
 				if(!istype(M) || !istype(piece) || !istype(compare_piece) || !msg_type)
-					if(M) M << "<span class='warning'>You must remain still while the suit is adjusting the components.</span>"
+					if(M)
+						to_chat(M, "<span class='warning'>You must remain still while the suit is adjusting the components.</span>")
 					failed_to_seal = 1
 					break
 
@@ -271,19 +293,19 @@
 					if(seal_delay && !instant && !do_after(M,seal_delay,needhand=0))
 						failed_to_seal = 1
 
-					piece.icon_state = "[initial(icon_state)][!seal_target ? "_sealed" : ""]"
+					piece.icon_state = "[suit_state][!seal_target ? "_sealed" : ""]"
 					switch(msg_type)
 						if("boots")
-							M << "<font color='blue'>\The [piece] [!seal_target ? "seal around your feet" : "relax their grip on your legs"].</font>"
+							to_chat(M, "<font color='blue'>\The [piece] [!seal_target ? "seal around your feet" : "relax their grip on your legs"].</font>")
 							M.update_inv_shoes()
 						if("gloves")
-							M << "<font color='blue'>\The [piece] [!seal_target ? "tighten around your fingers and wrists" : "become loose around your fingers"].</font>"
+							to_chat(M, "<font color='blue'>\The [piece] [!seal_target ? "tighten around your fingers and wrists" : "become loose around your fingers"].</font>")
 							M.update_inv_gloves()
 						if("chest")
-							M << "<font color='blue'>\The [piece] [!seal_target ? "cinches tight again your chest" : "releases your chest"].</font>"
+							to_chat(M, "<font color='blue'>\The [piece] [!seal_target ? "cinches tight again your chest" : "releases your chest"].</font>")
 							M.update_inv_wear_suit()
 						if("helmet")
-							M << "<font color='blue'>\The [piece] hisses [!seal_target ? "closed" : "open"].</font>"
+							to_chat(M, "<font color='blue'>\The [piece] hisses [!seal_target ? "closed" : "open"].</font>")
 							M.update_inv_head()
 							if(helmet)
 								helmet.update_light(wearer)
@@ -309,7 +331,7 @@
 		qdel(booting_R)
 		for(var/obj/item/piece in list(helmet,boots,gloves,chest))
 			if(!piece) continue
-			piece.icon_state = "[initial(icon_state)][!seal_target ? "" : "_sealed"]"
+			piece.icon_state = "[suit_state][!seal_target ? "" : "_sealed"]"
 		canremove = !seal_target
 		if(airtight)
 			update_component_sealed()
@@ -318,7 +340,7 @@
 
 	// Success!
 	canremove = seal_target
-	M << "<font color='blue'><b>Your entire suit [canremove ? "loosens as the components relax" : "tightens around you as the components lock into place"].</b></font>"
+	to_chat(M, "<font color='blue'><b>Your entire suit [canremove ? "loosens as the components relax" : "tightens around you as the components lock into place"].</b></font>")
 	M.client.screen -= booting_L
 	qdel(booting_L)
 	booting_R.icon_state = "boot_done"
@@ -336,9 +358,9 @@
 /obj/item/weapon/rig/proc/update_component_sealed()
 	for(var/obj/item/piece in list(helmet,boots,gloves,chest))
 		if(canremove)
-			piece.item_flags &= ~(STOPPRESSUREDAMAGE|AIRTIGHT)
+			update_airtight(piece, 0) // Unseal
 		else
-			piece.item_flags |=  (STOPPRESSUREDAMAGE|AIRTIGHT)
+			update_airtight(piece, 1) // Seal
 
 /obj/item/weapon/rig/ui_action_click()
 	toggle_cooling(usr)
@@ -353,19 +375,21 @@
 	if(!cell)
 		return
 	if(cell.charge <= 0)
-		user << "<span class='notice'>\The [src] has no power!.</span>"
+		to_chat(user, "<span class='notice'>\The [src] has no power!.</span>")
 		return
 	if(!suit_is_deployed())
-		user << "<span class='notice'>The hardsuit needs to be deployed first!.</span>"
+		to_chat(user, "<span class='notice'>The hardsuit needs to be deployed first!.</span>")
 		return
 
 	cooling_on = 1
-	usr << "<span class='notice'>You switch \the [src]'s cooling system on.</span>"
+	to_chat(usr, "<span class='notice'>You switch \the [src]'s cooling system on.</span>")
 
 
 /obj/item/weapon/rig/proc/turn_cooling_off(var/mob/user, var/failed)
-	if(failed) visible_message("\The [src]'s cooling system clicks and whines as it powers down.")
-	else usr << "<span class='notice'>You switch \the [src]'s cooling system off.</span>"
+	if(failed)
+		visible_message("\The [src]'s cooling system clicks and whines as it powers down.")
+	else
+		to_chat(usr, "<span class='notice'>You switch \the [src]'s cooling system off.</span>")
 	cooling_on = 0
 
 /obj/item/weapon/rig/proc/get_environment_temperature()
@@ -414,8 +438,10 @@
 
 	var/mob/living/carbon/human/H = loc
 
-	var/efficiency = 1 - H.get_pressure_weakness()		//you need to have a good seal for effective cooling
-	var/env_temp = get_environment_temperature()		//wont save you from a fire
+	var/turf/T = get_turf(src)
+	var/datum/gas_mixture/environment = T.return_air()
+	var/efficiency = 1 - H.get_pressure_weakness(environment.return_pressure())	// You need to have a good seal for effective cooling
+	var/env_temp = get_environment_temperature()						//wont save you from a fire
 	var/temp_adj = min(H.bodytemperature - max(thermostat, env_temp), max_cooling)
 
 	if (temp_adj < 0.5)	//only cools, doesn't heat, also we don't need extreme precision
@@ -450,13 +476,13 @@
 				if(istype(wearer))
 					if(!canremove)
 						if (offline_slowdown < 3)
-							wearer << "<span class='danger'>Your suit beeps stridently, and suddenly goes dead.</span>"
+							to_chat(wearer, "<span class='danger'>Your suit beeps stridently, and suddenly goes dead.</span>")
 						else
-							wearer << "<span class='danger'>Your suit beeps stridently, and suddenly you're wearing a leaden mass of metal and plastic composites instead of a powered suit.</span>"
+							to_chat(wearer, "<span class='danger'>Your suit beeps stridently, and suddenly you're wearing a leaden mass of metal and plastic composites instead of a powered suit.</span>")
 					if(offline_vision_restriction == 1)
-						wearer << "<span class='danger'>The suit optics flicker and die, leaving you with restricted vision.</span>"
+						to_chat(wearer, "<span class='danger'>The suit optics flicker and die, leaving you with restricted vision.</span>")
 					else if(offline_vision_restriction == 2)
-						wearer << "<span class='danger'>The suit optics drop out completely, drowning you in darkness.</span>"
+						to_chat(wearer, "<span class='danger'>The suit optics drop out completely, drowning you in darkness.</span>")
 		if(!offline)
 			offline = 1
 	else
@@ -509,7 +535,7 @@
 		fail_msg = "<span class='warning'>Not enough stored power.</span>"
 
 	if(fail_msg)
-		user << "[fail_msg]"
+		to_chat(user, fail_msg)
 		return 0
 
 	// This is largely for cancelling stealth and whatever.
@@ -542,7 +568,7 @@
 
 	data["charge"] =       cell ? round(cell.charge,1) : 0
 	data["maxcharge"] =    cell ? cell.maxcharge : 0
-	data["chargestatus"] = cell ? Floor((cell.charge/cell.maxcharge)*50) : 0
+	data["chargestatus"] = cell ? FLOOR((cell.charge/cell.maxcharge)*50, 1) : 0
 
 	data["emagged"] =       subverted
 	data["coverlock"] =     locked
@@ -589,7 +615,7 @@
 	if(module_list.len)
 		data["modules"] = module_list
 
-	ui = nanomanager.try_update_ui(user, src, ui_key, ui, data, force_open)
+	ui = SSnanoui.try_update_ui(user, src, ui_key, ui, data, force_open)
 	if (!ui)
 		ui = new(user, src, ui_key, ((src.loc != user) ? ai_interface_path : interface_path), interface_title, 480, 550, state = nano_state)
 		ui.set_initial_data(data)
@@ -987,15 +1013,10 @@
 	// AIs are a bit slower than regular and ignore move intent.
 	wearer_move_delay = world.time + ai_controlled_move_delay
 
-	var/tickcomp = 0
-	if(config.Tickcomp)
-		tickcomp = ((1/(world.tick_lag))*1.3) - 1.3
-		wearer_move_delay += tickcomp
-
 	if(istype(wearer.buckled, /obj/vehicle))
 		//manually set move_delay for vehicles so we don't inherit any mob movement penalties
 		//specific vehicle move delays are set in code\modules\vehicles\vehicle.dm
-		wearer_move_delay = world.time + tickcomp
+		wearer_move_delay = world.time
 		return wearer.buckled.relaymove(wearer, direction)
 
 	if(istype(wearer.machine, /obj/machinery))

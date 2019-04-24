@@ -1,5 +1,8 @@
 // Laws can be set by the president, here.
 
+#define CIVIL_OFFENSE "Civil Offense"
+#define CRIMINAL_OFFENSE "Criminal Offense"
+
 var/list/presidential_laws = list()
 
 /proc/instantiate_laws()
@@ -7,10 +10,13 @@ var/list/presidential_laws = list()
 		new instance
 
 /datum/president/laws/law
-	no = "i100"
+	var/id
 	name = "Sample Law"
 	desc = "Sample law text."
-  
-/datum/president/laws/law/New()
-	..()
-	src += presidential_laws	
+	
+	var/fine = 40 //in credits
+	var/class = CIVIL_OFFENSE
+	var/cell_time = 50 // how long the jail time should be
+	
+	
+  	
